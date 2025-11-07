@@ -1,0 +1,178 @@
+body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background-color: #101010;
+    color: #fff;
+    margin: 0;
+    padding: 40px 0; /* kasih jarak atas bawah biar fleksibel */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh; /* ganti height jadi min-height */
+}
+
+.container {
+   background-color: #1e1e1e;
+    padding: 30px;
+    border-radius: 12px;
+    width: 400px; /* sedikit lebih lebar biar isi tidak terlalu sempit */
+    box-shadow: 0 0 12px rgba(255,255,255,0.08);
+    min-height: 600px; /* tambahkan tinggi minimum agar stabil */
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+}
+
+h1, h2 {
+    text-align: center;
+    color: #00c896;
+}
+
+input, button {
+    width: 100%;
+    padding: 10px;
+    border: none;
+    border-radius: 6px;
+    margin-bottom: 15px;
+}
+
+button {
+    background-color: #00c896;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: #00b080;
+}
+
+a {
+    color: #00c896;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+.flash {
+    background: #222;
+    border-left: 5px solid #00c896;
+    padding: 10px;
+    margin-bottom: 15px;
+    border-radius: 6px;
+    font-size: 14px;
+    color: #bfffe8;
+}
+
+/* === ENCRYPT PAGE STYLES === */
+.tab-container {
+    margin-top: 20px;
+}
+
+.tabs {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.tab-button {
+    flex: 1;
+    padding: 10px 0;
+    background: #2a2a2a;
+    color: #aaa;
+    border: none;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 15px;
+    transition: 0.3s;
+}
+
+.tab-button:hover {
+    background: #00c89633;
+}
+
+.tab-button.active {
+    background: #00c896;
+    color: #000;
+    font-weight: bold;
+}
+
+/* === Perataan tinggi tiap tab agar sama === */
+.tab-content {
+    min-height: 320px; /* ubah nilai sesuai kebutuhan */
+    display: none;
+    background: #181818;
+    border: 1px solid #2e2e2e;
+    border-radius: 0 0 8px 8px;
+    padding: 25px;
+    animation: fadeIn 0.3s ease-in-out;
+    box-sizing: border-box;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Biar elemen di dalam tetap rata vertikal */
+.tab-content form {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+/* Untuk tombol di bawah form agar selalu rata bawah */
+.btn-group {
+    margin-top: auto;
+}
+
+
+.tab-content h2 {
+    color: #00c896;
+    margin-bottom: 10px;
+}
+
+textarea {
+    width: 100%;
+    padding: 10px;
+    background: #222;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 6px;
+    margin: 8px 0 16px 0;
+    resize: none;
+    min-height: 100px;
+}
+
+.btn-group {
+    display: flex;
+    gap: 10px;
+}
+
+button.secondary {
+    background-color: #333;
+}
+
+button.secondary:hover {
+    background-color: #444;
+}
+
+.footer {
+    text-align: center;
+    margin-top: 25px;
+    color: #888;
+}
+
+.footer a {
+    color: #00c896;
+    text-decoration: none;
+}
+.footer a:hover {
+    text-decoration: underline;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+

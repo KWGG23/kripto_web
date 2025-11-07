@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CryptoLab | Encrypt Center</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>CryptoLab Encryption Center</h1>
+        <p class="welcome">Welcome back, <b>{{ user }}</b>!</p>
+
+        <div class="tab-container">
+            <div class="tabs">
+                <button class="tab-button {{ 'active' if active_tab=='text' else '' }}" data-tab="text">🧠 Text Encryption</button>
+                <button class="tab-button {{ 'active' if active_tab=='file' else '' }}" data-tab="file">📁 File Encryption</button>
+                <button class="tab-button {{ 'active' if active_tab=='stegano' else '' }}" data-tab="stegano">🎥 Video Steganography</button>
+            </div>
+
+            <div class="tab-content {{ 'active' if active_tab=='text' else '' }}" id="text">
+                <h2>AES + SHA3 Text Encryption</h2>
+                    <form method="POST" action="{{ url_for('text_encrypt') }}">
+                    <textarea name="text" placeholder="Enter your text...">{{ text_result if text_result else '' }}</textarea>
+                    <input type="text" name="key" placeholder="Encryption Key" required>
+                    <div class="btn-group">
+            <button type="submit" name="action" value="encrypt">Encrypt</button>
+            <button type="submit" class="secondary" name="action" value="decrypt">Decrypt</button>
+        </div>
+    </form>
+</div>
+
+                <div class="tab-content {{ 'active' if active_tab=='file' else '' }}" id="file">
+  <h2>RSA-OAEP File Encryption</h2>
+  <form method="POST" action="{{ url_for('file_encrypt') }}" enctype="multipart/form-data">
+    <input type="file" name="file" required>
+    <div class="btn-group">
+      <button type="submit" name="action" value="encrypt">Encrypt File</button>
+      <button type="submit" name="action" value="decrypt" class="secondary">Decrypt File</button>
+    </div>
+  </form>
+
+  {% if download_name %}
+    <div class="flash" style="margin-top:12px">
+      File siap diunduh:
+      <a href="{{ url_for('download_file', filename=download_name) }}">{{ download_name }}</a>
+    </div>
+  {% endif %}
+</div>
+
+
+            <!-- TAB: Video Steganography -->
+<div class="tab-content {{ 'active' if active_tab=='stegano' else '' }}" id="stegano">
+  <h2>Video Frame Steganography</h2>
+
+  <!-- HIDE -->
+  <form method="POST" action="{{ url_for('stegano_process') }}" enctype="multipart/form-data" style="margin-bottom:16px;">
+    <label>Upload Video</label>
+    <input type="file" name="video" accept="video/*" required>
+    <label>Secret Message</label>
+    <textarea name="message" placeholder="Type your hidden message..."></textarea>
+    <div class="btn-group">
+      <button type="submit" name="action" value="hide">Hide Message</button>
+    </div>
+  </form>
+
+  <!-- EXTRACT -->
+  <form method="POST" action="{{ url_for('stegano_process') }}" enctype="multipart/form-data">
+    <label>Upload Stego Video</label>
+    <input type="file" name="video" accept="video/*" required>
+    <div class="btn-group">
+      <button class="secondary" type="submit" name="action" value="extract">Extract Message</button>
+    </div>
+  </form>
+
+  {% if extracted_message %}
+    <div class="flash" style="margin-top:12px;">
+      <strong>Extracted:</strong> {{ extracted_message }}
+    </div>
+  {% endif %}
+
+  {% if download_name %}
+    <div class="flash" style="margin-top:12px;">
+      Video siap diunduh:
+      <a href="{{ url_for('download_file', filename=download_name) }}">{{ download_name }}</a>
+    </div>
+  {% endif %}
+</div>
+
+        </div>
+
+        <p class="footer"><a href="/">← Back to Dashboard</a> | <a href="/logout">Logout</a></p>
+    </div>
+
+   <script>
+document.addEventListener("DOMContentLoaded", function() {
+  const btns = document.querySelectorAll(".tab-button");
+  const panes = document.querySelectorAll(".tab-content");
+  btns.forEach((b, i) => {
+    b.addEventListener("click", () => {
+      btns.forEach(x => x.classList.remove("active"));
+      panes.forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+      panes[i].classList.add("active");
+        });
+    });
+});
+</script>
+</body>
+</html>
