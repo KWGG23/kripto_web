@@ -2,13 +2,20 @@ import os
 import hashlib
 from hmac import compare_digest
 from config import get_db_connection
-from modules.crypto import generate_rsa_keys  # ⬅️ pastikan ini sudah ada
+from Crypto.PublicKey import RSA  # ⬅️ pastikan ini sudah ada
 from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import scrypt
 import traceback
 
 # Scrypt params (jangan ubah-ubah antar register & verify)
 SCRYPT_PARAMS = dict(n=16384, r=8, p=1, dklen=64)
+
+def generate_rsa_keys():
+    """Buat sepasang kunci RSA (private & public)."""
+    key = RSA.generate(2048)
+    private_key = key.export_key()
+    public_key = key.publickey().export_key()
+    return private_key, public_key
 
 def encrypt_private_key(private_pem, password):
     salt = os.urandom(16)
@@ -88,12 +95,14 @@ def register_user(username, email, password):
         # buat RSA keypair dan simpan di tabel user_keys
         try:
             private_key, public_key = generate_rsa_keys()
-            rsa_salt = os.urandom(16)
+
+            # Enkripsi private key pakai password user
+            enc_private, rsa_salt = encrypt_private_key(private_key, password)
 
             cursor.execute("""
                 INSERT INTO user_keys (user_id, rsa_public_pem, rsa_private_pem_enc, rsa_salt)
                 VALUES (%s, %s, %s, %s)
-            """, (user_id, public_key, private_key, rsa_salt))
+            """, (user_id, public_key, enc_private, rsa_salt))
             conn.commit()
             print(f"[RSA] RSA keypair dibuat untuk user_id={user_id}")
         except Exception as e:

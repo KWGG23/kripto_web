@@ -1,106 +1,107 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+from flask import Flask, render_template, request, redirect, url_for, flash, session, send_from_directory
 from modules.auth import register_user, login_user, decrypt_private_key
-from modules.crypto import aes_encrypt, aes_decrypt, aes_encrypt_text, aes_decrypt_text, rsa_encrypt_file, rsa_decrypt_file, generate_rsa_keys, hide_message_in_video, extract_message_from_video
-from flask import send_from_directory
+from modules.crypto import (
+    aes_encrypt, aes_decrypt, aes_encrypt_text, aes_decrypt_text,
+    rsa_hybrid_encrypt, rsa_hybrid_decrypt, compute_fp32,
+    hide_message_in_video, extract_message_from_video
+)
 from config import get_db_connection
-import hashlib
-import sys
 import os
 
-
-sys.stdout.reconfigure(line_buffering=True)
 app = Flask(__name__)
 app.secret_key = "super_secret_key"
-
 UPLOAD_FOLDER = 'static/uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+
+# --- Helper functions ---
 def get_current_user_id():
     conn = get_db_connection()
-    cur  = conn.cursor(dictionary=True)
-    cur.execute("SELECT user_id FROM users WHERE username=%s", (session['user'],))
-    row = cur.fetchone()
-    cur.close(); conn.close()
-    return row['user_id'] if row else None
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT user_id FROM users WHERE username = %s", (session['user'],))
+    user = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return user['user_id'] if user else None
 
-def get_user_keys(user_id: int):
-    conn = get_db_connection()
-    cur  = conn.cursor(dictionary=True)
-    cur.execute("""
-        SELECT rsa_public_pem, rsa_private_pem_enc, rsa_salt
-        FROM user_keys WHERE user_id = %s LIMIT 1
-    """, (user_id,))
-    row = cur.fetchone()
-    cur.close(); conn.close()
-    return row
 
-def save_file_record(user_id: int, original_name: str, encrypted_name: str, fingerprint_hex: str, encrypted_data: bytes):
-    """Catat metadata untuk kontrol kepemilikan: pakai fingerprint & hash isi file."""
-    file_hash = hashlib.sha256(encrypted_data).hexdigest()
+def get_user_keys(user_id):
+    """Ambil RSA public & private key milik user dari DB."""
     conn = get_db_connection()
-    cur  = conn.cursor()
-    cur.execute("""
-        INSERT INTO files (user_id, original_filename, encrypted_filename, fingerprint, file_hash)
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT rsa_public_pem, rsa_private_pem_enc, rsa_salt FROM user_keys WHERE user_id = %s", (user_id,))
+    keys = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return keys
+
+
+def save_file_record(user_id, original_name, enc_name, fingerprint):
+    """Simpan metadata file terenkripsi ke DB."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO files (user_id, original_filename, encrypted_filename, file_sha256, owner_fp)
         VALUES (%s, %s, %s, %s, %s)
-    """, (user_id, original_name, encrypted_name, fingerprint_hex, file_hash))
+    """, (user_id, original_name, enc_name, fingerprint, fingerprint))
     conn.commit()
-    cur.close(); conn.close()
+    cursor.close()
+    conn.close()
 
-def user_owns_encrypted_file(user_id: int, enc_name: str, encrypted_data: bytes) -> bool:
-    """
-    Validasi kepemilikan:
-      1) Baca fingerprint file (32 byte pertama → hexdigest)
-      2) Hash isi file (untuk cegah rename attack)
-      3) Cocokkan dengan record di DB untuk user_id & nama file
-    """
-    # fingerprint di HEADER file (32 bytes) → samakan format dengan kolom DB (hexdigest)
-    header_fp_hex = encrypted_data[:32].hex()
-    file_hash = hashlib.sha256(encrypted_data).hexdigest()
 
+def user_owns_encrypted_file(user_id, filename, file_data):
+    """Periksa apakah file yang akan didekripsi benar milik user."""
+    fingerprint = file_data[:32].hex()
     conn = get_db_connection()
-    cur  = conn.cursor()
-    cur.execute("""
-        SELECT 1 FROM files
-        WHERE user_id=%s AND encrypted_filename=%s AND fingerprint=%s AND file_hash=%s
-        LIMIT 1
-    """, (user_id, enc_name, header_fp_hex, file_hash))
-    ok = cur.fetchone() is not None
-    cur.close(); conn.close()
-    return ok
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT owner_fp FROM files WHERE encrypted_filename = %s AND user_id = %s", (filename, user_id))
+    record = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return record and record['owner_fp'] == fingerprint
 
+
+# --- Routes ---
 @app.route('/')
 def index():
     if 'user' in session:
         return render_template('dashboard.html', user=session['user'])
     return render_template('index.html')
 
-@app.route('/register', methods=['GET','POST'])
+
+@app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
-        username = request.form['username'].strip()
-        email    = request.form['email'].strip()
+        username = request.form['username']
+        email = request.form['email']
         password = request.form['password']
+
         if register_user(username, email, password):
             flash("✅ Registration successful! Please login.", "success")
             return redirect(url_for('login'))
         else:
             flash("❌ Email already registered or database error.", "danger")
+
     return render_template('register.html')
 
-@app.route('/login', methods=['GET','POST'])
+
+@app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        email    = request.form['email']
+        email = request.form['email']
         password = request.form['password']
+
         user = login_user(email, password)
         if user:
             session['user'] = user['username']
-            # simpan password plaintext hanya di session ( diperlukan utk decrypt private key )
-            session['user_password'] = password
+            session['user_password'] = password  # disimpan sementara untuk decrypt private key
             flash(f"✅ Welcome back, {user['username']}!", "success")
             return redirect(url_for('encrypt_file'))
-        flash("❌ Invalid email or password.", "danger")
+        else:
+            flash("❌ Invalid email or password.", "danger")
+
     return render_template('login.html')
+
 
 @app.route('/logout')
 def logout():
@@ -110,76 +111,19 @@ def logout():
     return redirect(url_for('index'))
 
 
-@app.route('/encrypt', methods=['GET','POST'])
+@app.route('/encrypt', methods=['GET', 'POST'])
 def encrypt_file():
+    """Halaman utama untuk semua jenis enkripsi"""
     if 'user' not in session:
         flash("⚠️ Please login first!", "warning")
         return redirect(url_for('login'))
 
-    active_tab    = request.args.get('t', 'text')
+    active_tab = request.args.get('t', 'text')
     download_name = session.pop('download_file', None)
-
-    if request.method == 'POST':
-        file = request.files.get('file')
-        key  = request.form.get('key', '').encode()
-        if not file or not key:
-            flash("❌ Please provide both a file and a key.", "danger")
-            return redirect(url_for('encrypt_file', t='file'))
-
-        try:
-            raw = file.read()
-            ext = os.path.splitext(file.filename)[1]
-            enc, fhash = aes_encrypt(raw, key, ext)
-
-            out_name = f"{os.path.splitext(file.filename)[0]}_encrypted.bin"
-            save_path = os.path.join(UPLOAD_FOLDER, out_name)
-            with open(save_path, "wb") as f:
-                f.write(enc)
-
-            session['download_file'] = out_name
-            flash(f"✅ File encrypted successfully! Hash: {fhash[:16]}...", "success")
-            return redirect(url_for('encrypt_file', t='file'))
-        except Exception as e:
-            flash(f"❌ Encryption failed: {e}", "danger")
-            return redirect(url_for('encrypt_file', t='file'))
-
     return render_template('encrypt_form.html',
                            user=session.get('user'),
                            active_tab=active_tab,
                            download_name=download_name)
-
-@app.route('/decrypt', methods=['POST'])
-def decrypt_file():
-    if 'user' not in session:
-        flash("⚠️ Please login first!", "warning")
-        return redirect(url_for('login'))
-
-    file = request.files.get('file')
-    key  = request.form.get('key', '').encode()
-    if not file or not key:
-        flash("❌ Please provide both a file and a key.", "danger")
-        return redirect(url_for('encrypt_file', t='file'))
-
-    try:
-        enc = file.read()
-        dec, ext = aes_decrypt(enc, key)
-
-        base = os.path.splitext(file.filename)[0]
-        if base.endswith("_encrypted"):
-            base = base.replace("_encrypted", "")
-        out_name = f"{base}_decrypted{ext}"
-        save_path = os.path.join(UPLOAD_FOLDER, out_name)
-        with open(save_path, "wb") as f:
-            f.write(dec)
-
-        session['download_file'] = out_name
-        flash(f"✅ File berhasil didekripsi: {out_name}", "success")
-        return redirect(url_for('encrypt_file', t='file'))
-    except Exception as e:
-        flash(f"❌ Error during decryption: {e}", "danger")
-        return redirect(url_for('encrypt_file', t='file'))
-
-
 
 @app.route('/text_encrypt', methods=['POST'])
 def text_encrypt():
@@ -187,39 +131,35 @@ def text_encrypt():
         flash("⚠️ Please login first!", "warning")
         return redirect(url_for('login'))
 
-    text   = request.form.get('text')
-    key    = request.form.get('key')
+    text = request.form.get('text')
+    key = request.form.get('key')
     action = request.form.get('action')
+
     if not text or not key:
         flash("❌ Text and key are required.", "danger")
-        return redirect(url_for('encrypt_file', t='text'))
+        return redirect(url_for('encrypt_file'))
 
-    if action == 'encrypt':
+    if action == "encrypt":
         result = aes_encrypt_text(text, key)
         flash("✅ Text encrypted successfully!", "success")
     else:
         result = aes_decrypt_text(text, key)
         flash("🔓 Text decrypted successfully!", "info")
 
-    return render_template("encrypt_form.html",
-                           user=session['user'],
+    return render_template("encrypt_form.html", 
+                           user=session['user'], 
                            text_result=result,
                            active_tab="text")
 
-@app.route('/download/<path:filename>')
-def download_file(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
 
-
-
-@app.route('/file_encrypt', methods=['POST'], endpoint='file_encrypt')
-def file_encrypt_rsa():
-    """Enkripsi/Dekripsi file berbasis RSA+AES Hybrid (terikat user lewat fingerprint)."""
+@app.route('/file_encrypt', methods=['POST'])
+def file_encrypt():
+    """RSA Hybrid Encryption: file hanya bisa didekripsi oleh pemiliknya"""
     if 'user' not in session:
         flash("⚠️ Please login first!", "warning")
         return redirect(url_for('login'))
 
-    file   = request.files.get('file')
+    file = request.files.get('file')
     action = request.form.get('action')
     if not file:
         flash("❌ Please upload a file.", "danger")
@@ -239,66 +179,53 @@ def file_encrypt_rsa():
 
     try:
         if action == 'encrypt':
-            # Enkripsi pakai public key user + dapatkan fingerprint
-            public_pem = keys['rsa_public_pem']
-            enc_blob, fp_hex = rsa_encrypt_file(data, public_pem)
-
-            out_name  = f"{file.filename}_encrypted.bin"
+            print(f"[DEBUG] 🔒 Encrypting file for user {user_id}")
+            blob, fp_hex = rsa_hybrid_encrypt(data, keys['rsa_public_pem'])
+            out_name = f"{file.filename}_encrypted.bin"
             save_path = os.path.join(UPLOAD_FOLDER, out_name)
             with open(save_path, "wb") as f:
-                f.write(enc_blob)
+                f.write(blob)
 
-            # Simpan metadata ownership
-            save_file_record(user_id, file.filename, out_name, fp_hex, enc_blob)
-
+            save_file_record(user_id, file.filename, out_name, fp_hex)
             session['download_file'] = out_name
-            flash(f"✅ File terenkripsi: {out_name}", "success")
-            return redirect(url_for('encrypt_file', t='file'))
+            flash(f"✅ File terenkripsi dengan fingerprint: {fp_hex[:16]}...", "success")
 
         elif action == 'decrypt':
-            # Validasi kepemilikan (DB vs header fingerprint + hash isi)
+            print(f"[DEBUG] 🔓 Attempting decryption for user {user_id}")
             enc_name = file.filename
             if not user_owns_encrypted_file(user_id, enc_name, data):
                 flash("⛔ Kamu tidak berhak mendekripsi file ini.", "danger")
+                print(f"[SECURITY] Unauthorized decrypt attempt by user {user_id}")
                 return redirect(url_for('encrypt_file', t='file'))
 
-            # Dekripsi private key milik user dari DB
             password = session.get('user_password')
-            if not password:
-                flash("⚠️ Silakan login ulang untuk mendekripsi private key.", "warning")
-                return redirect(url_for('login'))
-
             private_enc = keys['rsa_private_pem_enc']
-            salt        = keys['rsa_salt']
+            salt = keys['rsa_salt']
             private_pem = decrypt_private_key(private_enc, salt, password)
             if private_pem is None:
-                flash("❌ Gagal mendekripsi private key user.", "danger")
+                flash("❌ Gagal mendekripsi private key. Password salah atau data kunci korup.", "danger")
                 return redirect(url_for('encrypt_file', t='file'))
+            plain = rsa_hybrid_decrypt(data, private_pem)
 
-            # Dekripsi file
-            dec_bytes = rsa_decrypt_file(data, private_pem)
-
-            out_name  = enc_name.replace("_encrypted.bin", "_decrypted.bin")
+            out_name = enc_name.replace("_encrypted.bin", "")
             save_path = os.path.join(UPLOAD_FOLDER, out_name)
             with open(save_path, "wb") as f:
-                f.write(dec_bytes)
+                f.write(plain)
 
             session['download_file'] = out_name
             flash(f"🔓 File berhasil didekripsi: {out_name}", "info")
-            return redirect(url_for('encrypt_file', t='file'))
 
         else:
             flash("❌ Invalid action.", "danger")
-            return redirect(url_for('encrypt_file', t='file'))
 
-    except ValueError as ve:
-        flash(f"❌ Key tidak cocok: {ve}", "danger")
-        return redirect(url_for('encrypt_file', t='file'))
     except Exception as e:
-        flash(f"❌ Terjadi kesalahan: {e}", "danger")
-        return redirect(url_for('encrypt_file', t='file'))
+        flash(f"❌ Error: {e}", "danger")
+        print(f"[ERROR] file_encrypt: {e}")
+
+    return redirect(url_for('encrypt_file', t='file'))
 
 
+# === Steganografi ===
 @app.route('/stegano', methods=['POST'])
 def stegano_process():
     if 'user' not in session:
@@ -309,43 +236,24 @@ def stegano_process():
     video = request.files.get('video')
     message = request.form.get('message', '')
 
-    # Debug awal
-    print("==== STEGANO REQUEST ====")
+    print("==== STEGANO ====")
     print("Action:", action)
     print("Video:", video.filename if video else None)
-    print("Message:", message.strip()[:50])
-    print("=========================")
 
     if action == 'hide':
         if not video or not message.strip():
             flash("❌ Upload video dan isi pesan yang ingin disembunyikan.", "danger")
             return redirect(url_for('encrypt_file', t='stegano'))
 
-        # Simpan video input
         ext = os.path.splitext(video.filename)[1]
         in_name = f"vid_in_{os.path.splitext(video.filename)[0]}{ext}"
         in_path = os.path.join(UPLOAD_FOLDER, in_name)
         video.save(in_path)
 
-        try:
-            info = hide_message_in_video(in_path, message.strip())
-
-            # Debug terminal
-            print("=== DEBUG STEGANO ===")
-            print("Input video :", in_path)
-            print("Output video:", info.get("output"))
-            print("Embedded bits:", info.get("embedded_bits"))
-            print("=====================")
-
-            # Ambil nama file hasil output
-            out_name = os.path.basename(info['output'])
-            session['download_file'] = out_name
-
-            flash(f"✅ Pesan disisipkan ({info['embedded_bits']} bit) • Ready: {out_name}", "success")
-
-        except Exception as e:
-            print("❌ ERROR hide_message_in_video:", str(e))
-            flash(f"❌ Gagal menyisipkan pesan: {e}", "danger")
+        info = hide_message_in_video(in_path, message.strip())
+        out_name = os.path.basename(info['output'])
+        session['download_file'] = out_name
+        flash(f"✅ Pesan disisipkan ({info['embedded_bits']} bit) • Ready: {out_name}", "success")
 
         return redirect(url_for('encrypt_file', t='stegano'))
 
@@ -354,27 +262,23 @@ def stegano_process():
             flash("❌ Upload video yang mengandung pesan tersembunyi.", "danger")
             return redirect(url_for('encrypt_file', t='stegano'))
 
-        in_name = f"vid_ext_{video.filename}"
-        in_path = os.path.join(UPLOAD_FOLDER, in_name)
+        in_path = os.path.join(UPLOAD_FOLDER, f"vid_ext_{video.filename}")
         video.save(in_path)
+        secret = extract_message_from_video(in_path)
+        flash("🔎 Pesan berhasil diekstrak.", "info")
+        return render_template('encrypt_form.html',
+                               user=session.get('user'),
+                               active_tab='stegano',
+                               extracted_message=secret)
 
-        try:
-            secret = extract_message_from_video(in_path)
-            flash("🔎 Pesan berhasil diekstrak.", "info")
-            return render_template(
-                'encrypt_form.html',
-                user=session.get('user'),
-                active_tab='stegano',
-                extracted_message=secret
-            )
-        except Exception as e:
-            print("❌ ERROR extract_message_from_video:", str(e))
-            flash(f"❌ Gagal mengekstrak pesan: {e}", "danger")
-            return redirect(url_for('encrypt_file', t='stegano'))
+    flash("❌ Aksi tidak dikenal.", "danger")
+    return redirect(url_for('encrypt_file', t='stegano'))
 
-    else:
-        flash("❌ Aksi tidak dikenal.", "danger")
-        return redirect(url_for('encrypt_file', t='stegano'))
+
+@app.route('/download/<path:filename>')
+def download_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+
 
 if __name__ == '__main__':
     app.run(debug=True, use_reloader=False)
